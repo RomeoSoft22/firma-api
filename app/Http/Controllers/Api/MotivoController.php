@@ -15,15 +15,18 @@ class MotivoController extends Controller
 {
     private const SIN_MOTIVOS = 'Debe existir al menos un motivo activo: no se puede eliminar ni desactivar el último.';
 
-    /** Motivos vigentes (los eliminados lógicamente no se listan). */
-    public function index(Request $request): JsonResponse
+    /** Todos los motivos vigentes, activos e inactivos (Configuración; requiere acceso). */
+    public function index(): JsonResponse
     {
-        $consulta = Motivo::query()->orderBy('orden')->orderBy('descripcion');
-        if ($request->boolean('activos')) {
-            $consulta->where('activo', true);
-        }
+        return response()->json(Motivo::query()->orderBy('orden')->orderBy('descripcion')->get());
+    }
 
-        return response()->json($consulta->get());
+    /** Motivos activos para la pantalla de firma (público, solo lectura). */
+    public function activos(): JsonResponse
+    {
+        return response()->json(
+            Motivo::query()->where('activo', true)->orderBy('orden')->orderBy('descripcion')->get()
+        );
     }
 
     public function store(Request $request): JsonResponse

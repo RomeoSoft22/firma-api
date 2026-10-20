@@ -8,6 +8,7 @@ use App\Models\Lote;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -58,7 +59,24 @@ class DocumentoController extends Controller
             'estado' => 'pendiente',
         ]);
 
-        return response()->json($documento, 201);
+        // Token de carga: solo quien subió el original puede adjuntar el PDF firmado o el error.
+        $token = bin2hex(random_bytes(24));
+        Cache::put($this->llaveCarga($documento), hash('sha256', $token), now()->addHours(12));
+
+        return response()->json([...$documento->toArray(), 'token_carga' => $token], 201);
+    }
+
+    private function llaveCarga(Documento $documento): string
+    {
+        return 'carga-documento:'.$documento->id;
+    }
+
+    /** Valida el token de carga (cabecera X-Token-Carga) emitido al subir el original. */
+    private function exigirTokenCarga(Request $request, Documento $documento): void
+    {
+        $esperado = Cache::get($this->llaveCarga($documento));
+        $recibido = hash('sha256', (string) $request->header('X-Token-Carga'));
+        abort_unless(is_string($esperado) && hash_equals($esperado, $recibido), 403);
     }
 
     public function show(Documento $documento): JsonResponse
@@ -69,6 +87,7 @@ class DocumentoController extends Controller
     /** Recibe el PDF ya firmado por el agente local y los datos del firmante. */
     public function registrarFirma(Request $request, Documento $documento): JsonResponse
     {
+        $this->exigirTokenCarga($request, $documento);
         $datos = $request->validate([
             'archivo' => ['required', 'file', 'mimes:pdf', 'max:204800'],
             'firmante' => ['required', 'string', 'max:255'],
@@ -98,6 +117,7 @@ class DocumentoController extends Controller
             'fecha_firma' => isset($datos['fecha_firma']) ? Carbon::parse($datos['fecha_firma'])->utc() : now(),
         ])->save();
 
+        Cache::forget($this->llaveCarga($documento)); // el token es de un solo uso
         $this->cerrarLoteSiCorresponde($documento);
 
         return response()->json($documento);
@@ -105,6 +125,7 @@ class DocumentoController extends Controller
 
     public function registrarError(Request $request, Documento $documento): JsonResponse
     {
+        $this->exigirTokenCarga($request, $documento);
         $datos = $request->validate(['mensaje' => ['required', 'string', 'max:2000']]);
         $documento->update(['estado' => 'error', 'mensaje_error' => $datos['mensaje']]);
         $this->cerrarLoteSiCorresponde($documento);
@@ -127,8 +148,9 @@ class DocumentoController extends Controller
     {
         $documento = Documento::where('hash_firmado', strtolower($hash))->first();
 
+        // Ruta pública (pantalla Verificar): solo los datos necesarios para confirmar la emisión.
         return $documento
-            ? response()->json($documento)
+            ? response()->json($documento->only(['id', 'nombre_original', 'firmante', 'fecha_firma', 'estado']))
             : response()->json(['message' => 'No registrado en este sistema.'], 404);
     }
 

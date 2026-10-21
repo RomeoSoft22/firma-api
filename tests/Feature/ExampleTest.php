@@ -16,6 +16,6 @@ class ExampleTest extends TestCase
         $this->get('/')
             ->assertNotFound()
             ->assertHeaderMissing('X-Powered-By')
-            ->assertJson(['message' => 'El recurso solicitado no existe.']);
+            ->assertJson(['message' => 'No encontramos lo que buscas.']);
     }
 }

@@ -3,84 +3,114 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Http\Middleware\RequiereAcceso;
+use App\Support\Identidad;
+use Illuminate\Http\Client\Response as RespuestaIdentidad;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Log;
+use Symfony\Component\HttpFoundation\Cookie;
+use Throwable;
 
 /**
- * Acceso de administración (Historial y Configuración) con la clave de ADMIN_CLAVE en .env.
- * Limita los intentos fallidos por IP y globalmente para impedir ataques de fuerza bruta.
+ * Acceso de administración (Historial y Configuración) con identidad.juarezcampos.net.
+ * El ingreso ocurre en identidad; aquí solo se canjea el código (servidor a servidor, con el
+ * secreto del cliente), se renueva el access token con el refresh token guardado en una cookie
+ * HttpOnly y se arma la URL para cerrar la sesión.
  */
 class AccesoController extends Controller
 {
-    private const LLAVE_GLOBAL = 'acceso-admin:global';
-
-    public function entrar(Request $request): JsonResponse
+    public function config(): JsonResponse
     {
-        $clave = (string) config('firma.clave_admin');
-        if ($clave === '') {
-            return response()->json(['message' => 'El acceso de administración no está configurado en el servidor.'], 503);
-        }
-
-        $datos = $request->validate(['clave' => ['required', 'string', 'max:200']]);
-
-        $llaveIp = 'acceso-admin:ip:'.sha1((string) $request->ip());
-        $intentos = max(1, (int) config('firma.intentos'));
-        $bloqueo = max(1, (int) config('firma.bloqueo_minutos')) * 60;
-        $globales = max($intentos, (int) config('firma.intentos_globales'));
-
-        if (RateLimiter::tooManyAttempts($llaveIp, $intentos) || RateLimiter::tooManyAttempts(self::LLAVE_GLOBAL, $globales)) {
-            $segundos = max(RateLimiter::availableIn($llaveIp), RateLimiter::availableIn(self::LLAVE_GLOBAL));
-            $minutos = max(1, (int) ceil($segundos / 60));
-
-            return response()->json(
-                ['message' => "Demasiados intentos fallidos. Intente nuevamente en {$minutos} minuto(s)."],
-                429,
-                ['Retry-After' => $segundos],
-            );
-        }
-
-        if (! hash_equals($clave, $datos['clave'])) {
-            RateLimiter::hit($llaveIp, $bloqueo);
-            RateLimiter::hit(self::LLAVE_GLOBAL, $bloqueo);
-            usleep(random_int(300_000, 700_000)); // ralentiza los intentos automatizados
-            $restantes = RateLimiter::remaining($llaveIp, $intentos);
-
-            return response()->json([
-                'message' => $restantes > 0
-                    ? "Clave incorrecta. Le quedan {$restantes} intento(s)."
-                    : "Clave incorrecta. Acceso bloqueado durante {$this->minutos($bloqueo)} minuto(s).",
-                'intentos_restantes' => $restantes,
-            ], 401);
-        }
-
-        RateLimiter::clear($llaveIp);
-        $token = bin2hex(random_bytes(32));
-        $minutosSesion = max(5, (int) config('firma.sesion_minutos'));
-        Cache::put(RequiereAcceso::llave($token), true, now()->addMinutes($minutosSesion));
-
-        return response()->json(['token' => $token, 'expira_en' => $minutosSesion * 60]);
+        return response()->json([
+            'authorize_endpoint' => Identidad::config('url').'/authorize',
+            'client_id' => Identidad::config('client_id'),
+            'redirect_uri' => Identidad::config('redirect_uri'),
+        ]);
     }
 
-    /** Comprueba que la sesión siga vigente (la ruta está protegida por RequiereAcceso). */
-    public function verificar(): JsonResponse
+    public function canjear(Request $request): JsonResponse
     {
-        return response()->json(['acceso' => true]);
+        $datos = $request->validate([
+            'code' => ['required', 'string', 'max:4096'],
+            'code_verifier' => ['required', 'string', 'min:43', 'max:128'],
+        ]);
+
+        return $this->responderTokens($request, Identidad::canjearCodigo($datos['code'], $datos['code_verifier']));
+    }
+
+    public function renovar(Request $request): JsonResponse
+    {
+        $refresh = $request->cookie(Identidad::config('refresh_cookie'));
+        if (! $refresh) {
+            return response()->json(['codigo' => 'no_autenticado', 'message' => 'No hay una sesión abierta.'], 401);
+        }
+
+        return $this->responderTokens($request, Identidad::renovar($refresh));
+    }
+
+    /** Quién está conectado (la ruta está protegida por RequiereAcceso). */
+    public function yo(Request $request): JsonResponse
+    {
+        $claims = $request->attributes->get('identidad');
+
+        return response()->json(['usuario' => $this->usuario($claims)]);
     }
 
     public function salir(Request $request): JsonResponse
     {
-        if ($token = $request->bearerToken()) {
-            Cache::forget(RequiereAcceso::llave($token));
-        }
+        $destino = Identidad::config('post_logout_redirect_uri');
+        $url = Identidad::config('url').'/logout'.($destino ? '?post_logout_redirect_uri='.urlencode($destino) : '');
 
-        return response()->json(null, 204);
+        return response()->json(['logout_url' => $url])->withCookie($this->olvidarCookie($request));
     }
 
-    private function minutos(int $segundos): int
+    private function responderTokens(Request $request, RespuestaIdentidad $respuesta): JsonResponse
     {
-        return (int) ceil($segundos / 60);
+        $tokens = $respuesta->json();
+        if (! $respuesta->successful() || empty($tokens['access_token'])) {
+            Log::info('identidad rechazó la emisión de token', ['status' => $respuesta->status(), 'error' => $tokens['error'] ?? null]);
+
+            return response()->json(['codigo' => 'no_autenticado', 'message' => 'Tu sesión no es válida o venció. Vuelve a iniciar sesión.'], 401)
+                ->withCookie($this->olvidarCookie($request));
+        }
+
+        try {
+            $claims = Identidad::verificar($tokens['access_token']);
+        } catch (Throwable $e) {
+            Log::warning('token de identidad inválido', ['error' => $e->getMessage()]);
+
+            return response()->json(['codigo' => 'no_autenticado', 'message' => 'No pudimos validar tu sesión. Vuelve a iniciar sesión.'], 401);
+        }
+
+        if (! Identidad::esAdministrador($claims)) {
+            return response()->json(['codigo' => 'sin_permiso', 'message' => 'Tu cuenta no tiene permiso para Historial ni Configuración.'], 403)
+                ->withCookie($this->olvidarCookie($request));
+        }
+
+        $json = response()->json([
+            'access_token' => $tokens['access_token'],
+            'token_type' => 'Bearer',
+            'expires_in' => (int) ($tokens['expires_in'] ?? 900),
+            'usuario' => $this->usuario($claims),
+        ]);
+
+        return empty($tokens['refresh_token'])
+            ? $json
+            : $json->withCookie($this->cookie($request, $tokens['refresh_token'], (int) Identidad::config('refresh_minutes')));
+    }
+
+    private function usuario(array $claims): array
+    {
+        return ['nombre' => $claims['name'] ?? null, 'correo' => $claims['email'] ?? null, 'roles' => (array) ($claims['roles'] ?? [])];
+    }
+
+    private function cookie(Request $request, string $valor, int $minutos): Cookie
+    {
+        return cookie(Identidad::config('refresh_cookie'), $valor, $minutos, '/api/acceso', null, $request->isSecure(), true, false, 'strict');
+    }
+
+    private function olvidarCookie(Request $request): Cookie
+    {
+        return $this->cookie($request, '', -2628000);
     }
 }

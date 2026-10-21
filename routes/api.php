@@ -13,9 +13,11 @@ Route::middleware('throttle:300,1')->group(function () {
     Route::get('estado', fn () => ['estado' => 'ok']);
 
     // ---------------------------------------------------------------- Acceso de administración
-    // El límite de intentos fallidos (por IP y global) lo aplica AccesoController con contadores
-    // propios. No se agrega otro "throttle" aquí: compartiría el contador por IP del grupo.
-    Route::post('acceso', [AccesoController::class, 'entrar']);
+    // El ingreso ocurre en identidad.juarezcampos.net (SSO). Aquí solo se canjea el código,
+    // se renueva el token con la cookie HttpOnly y se arma la URL de salida.
+    Route::get('acceso/config', [AccesoController::class, 'config']);
+    Route::post('acceso/canjear', [AccesoController::class, 'canjear'])->middleware('throttle:20,1');
+    Route::post('acceso/renovar', [AccesoController::class, 'renovar'])->middleware('throttle:60,1');
     Route::post('acceso/salir', [AccesoController::class, 'salir']);
 
     // ---------------------------------------------------------------- Público: flujo de firma
@@ -31,9 +33,9 @@ Route::middleware('throttle:300,1')->group(function () {
     Route::get('motivos/{motivo}/imagen', [MotivoController::class, 'imagen'])->whereNumber('motivo');
     Route::get('parametros', [ParametroController::class, 'index']);
 
-    // ---------------------------------------------------------------- Protegido: Historial y Configuración
+    // ---------------------------------------------------------------- Protegido: Historial y Configuración (JWT de identidad con rol ADMIN en FIRMA)
     Route::middleware(RequiereAcceso::class)->group(function () {
-        Route::get('acceso/verificar', [AccesoController::class, 'verificar']);
+        Route::get('acceso/yo', [AccesoController::class, 'yo']);
 
         Route::get('documentos', [DocumentoController::class, 'index']);
         Route::get('documentos/estadisticas', [DocumentoController::class, 'estadisticas']);

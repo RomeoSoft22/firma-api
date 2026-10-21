@@ -2,32 +2,37 @@
 
 namespace App\Http\Middleware;
 
+use App\Support\Identidad;
 use Closure;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 use Symfony\Component\HttpFoundation\Response;
+use Throwable;
 
 /**
- * Exige una sesión de administración válida (Authorization: Bearer <token>) obtenida con la
- * clave de ADMIN_CLAVE. Solo se guarda el hash del token; la sesión se renueva con cada uso.
+ * Historial y Configuración: exige el JWT que emite identidad.juarezcampos.net para FIRMA
+ * (Authorization: Bearer), vigente y con un rol de administración. Los claims quedan en
+ * $request->attributes->get('identidad') para auditar quién hizo cada acción.
  */
 class RequiereAcceso
 {
-    public static function llave(string $token): string
-    {
-        return 'acceso-admin:sesion:'.hash('sha256', $token);
-    }
-
     public function handle(Request $request, Closure $next): Response
     {
-        $token = (string) $request->bearerToken();
-        $llave = self::llave($token);
-
-        if (strlen($token) !== 64 || ! Cache::has($llave)) {
-            return response()->json(['message' => 'Ingrese la clave de administración.'], 401);
+        $jwt = (string) $request->bearerToken();
+        if ($jwt === '') {
+            return response()->json(['codigo' => 'no_autenticado', 'message' => 'Inicia sesión para continuar.'], 401);
         }
 
-        Cache::put($llave, true, now()->addMinutes(max(5, (int) config('firma.sesion_minutos'))));
+        try {
+            $claims = Identidad::verificar($jwt);
+        } catch (Throwable) {
+            return response()->json(['codigo' => 'no_autenticado', 'message' => 'Tu sesión no es válida o venció. Vuelve a iniciar sesión.'], 401);
+        }
+
+        if (! Identidad::esAdministrador($claims)) {
+            return response()->json(['codigo' => 'sin_permiso', 'message' => 'Tu cuenta no tiene permiso para Historial ni Configuración.'], 403);
+        }
+
+        $request->attributes->set('identidad', $claims);
 
         return $next($request);
     }

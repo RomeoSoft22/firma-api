@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\AccesoController;
 use App\Http\Controllers\Api\DocumentoController;
 use App\Http\Controllers\Api\LoteController;
+use App\Http\Controllers\Api\MarcaController;
 use App\Http\Controllers\Api\MotivoController;
 use App\Http\Controllers\Api\ParametroController;
 use App\Http\Middleware\RequiereAcceso;
@@ -32,6 +33,9 @@ Route::middleware('throttle:300,1')->group(function () {
     Route::get('motivos', [MotivoController::class, 'activos']);
     Route::get('motivos/{motivo}/imagen', [MotivoController::class, 'imagen'])->whereNumber('motivo');
     Route::get('parametros', [ParametroController::class, 'index']);
+    // Logos de la marca (web y aplicación de escritorio).
+    Route::get('marca', [MarcaController::class, 'index']);
+    Route::get('marca/{variante}', [MarcaController::class, 'mostrar'])->whereIn('variante', MarcaController::VARIANTES);
 
     // ---------------------------------------------------------------- Protegido: Historial y Configuración (JWT de identidad con rol ADMIN en FIRMA)
     Route::middleware(RequiereAcceso::class)->group(function () {
@@ -56,5 +60,8 @@ Route::middleware('throttle:300,1')->group(function () {
         Route::delete('motivos/{motivo}/imagen', [MotivoController::class, 'eliminarImagen'])->whereNumber('motivo');
 
         Route::put('parametros', [ParametroController::class, 'update']);
+
+        Route::post('marca/{variante}', [MarcaController::class, 'subir'])->whereIn('variante', MarcaController::VARIANTES);
+        Route::delete('marca/{variante}', [MarcaController::class, 'restaurar'])->whereIn('variante', MarcaController::VARIANTES);
     });
 });

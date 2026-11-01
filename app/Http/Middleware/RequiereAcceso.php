@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Support\AccesoEscritorio;
 use App\Support\Identidad;
 use Closure;
 use Illuminate\Http\Request;
@@ -10,7 +11,8 @@ use Throwable;
 
 /**
  * Historial y Configuración: exige el JWT que emite identidad.juarezcampos.net para FIRMA
- * (Authorization: Bearer), vigente y con un rol de administración. Los claims quedan en
+ * (Authorization: Bearer), vigente y con un rol de administración, o el token de la clave de
+ * administración de la aplicación de escritorio (AccesoEscritorio). Los claims quedan en
  * $request->attributes->get('identidad') para auditar quién hizo cada acción.
  */
 class RequiereAcceso
@@ -20,6 +22,16 @@ class RequiereAcceso
         $jwt = (string) $request->bearerToken();
         if ($jwt === '') {
             return response()->json(['codigo' => 'no_autenticado', 'message' => 'Inicia sesión para continuar.'], 401);
+        }
+
+        // Token de la clave de administración de la aplicación de escritorio.
+        if (str_starts_with($jwt, AccesoEscritorio::PREFIJO)) {
+            if (! AccesoEscritorio::valido($jwt)) {
+                return response()->json(['codigo' => 'no_autenticado', 'message' => 'La sesión de administración venció. Vuelve a ingresar la contraseña.'], 401);
+            }
+            $request->attributes->set('identidad', AccesoEscritorio::CLAIMS);
+
+            return $next($request);
         }
 
         try {

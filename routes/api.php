@@ -20,6 +20,8 @@ Route::middleware('throttle:300,1')->group(function () {
     Route::post('acceso/canjear', [AccesoController::class, 'canjear'])->middleware('throttle:20,1');
     Route::post('acceso/renovar', [AccesoController::class, 'renovar'])->middleware('throttle:60,1');
     Route::post('acceso/salir', [AccesoController::class, 'salir']);
+    // Aplicación de escritorio: «Opciones de administración» con una sola contraseña.
+    Route::post('acceso/clave', [AccesoController::class, 'clave'])->middleware('throttle:clave-escritorio');
 
     // ---------------------------------------------------------------- Público: flujo de firma
     // Subir el original devuelve un token de carga; solo con él se adjunta el firmado o el error.
@@ -40,6 +42,8 @@ Route::middleware('throttle:300,1')->group(function () {
     // ---------------------------------------------------------------- Protegido: Historial y Configuración (JWT de identidad con rol ADMIN en FIRMA)
     Route::middleware(RequiereAcceso::class)->group(function () {
         Route::get('acceso/yo', [AccesoController::class, 'yo']);
+        Route::get('acceso/clave-escritorio', [AccesoController::class, 'estadoClaveEscritorio']);
+        Route::put('acceso/clave-escritorio', [AccesoController::class, 'definirClaveEscritorio']);
 
         Route::get('documentos', [DocumentoController::class, 'index']);
         Route::get('documentos/estadisticas', [DocumentoController::class, 'estadisticas']);

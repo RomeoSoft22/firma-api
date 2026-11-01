@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Support\AccesoEscritorio;
 use App\Support\Identidad;
 use Illuminate\Http\Client\Response as RespuestaIdentidad;
 use Illuminate\Http\JsonResponse;
@@ -56,8 +57,62 @@ class AccesoController extends Controller
         return response()->json(['usuario' => $this->usuario($claims)]);
     }
 
+    /** Aplicación de escritorio: ingreso con la clave de administración (sin identidad). */
+    public function clave(Request $request): JsonResponse
+    {
+        $datos = $request->validate(['clave' => ['required', 'string', 'max:200']]);
+
+        if (! AccesoEscritorio::definida()) {
+            return response()->json([
+                'codigo' => 'sin_clave',
+                'message' => 'Aún no se definió la contraseña del administrador. Defínala en la web: Configuración → Clave de administración.',
+            ], 409);
+        }
+        if (! AccesoEscritorio::correcta($datos['clave'])) {
+            Log::notice('clave de administración de escritorio incorrecta', ['ip' => $request->ip()]);
+
+            return response()->json(['codigo' => 'clave_incorrecta', 'message' => 'La contraseña no es correcta.'], 401);
+        }
+
+        Log::info('ingreso con la clave de administración de escritorio', ['ip' => $request->ip()]);
+
+        return response()->json([
+            'access_token' => AccesoEscritorio::emitir(),
+            'token_type' => 'Bearer',
+            'expires_in' => AccesoEscritorio::MINUTOS * 60,
+            'usuario' => $this->usuario(AccesoEscritorio::CLAIMS),
+        ]);
+    }
+
+    /** Si la clave de escritorio ya está definida (Configuración en la web). */
+    public function estadoClaveEscritorio(): JsonResponse
+    {
+        return response()->json(['definida' => AccesoEscritorio::definida()]);
+    }
+
+    /** Define o cambia la clave de escritorio: solo un administrador que ingresó con identidad. */
+    public function definirClaveEscritorio(Request $request): JsonResponse
+    {
+        if (($request->attributes->get('identidad')['sub'] ?? null) === AccesoEscritorio::CLAIMS['sub']) {
+            return response()->json(['codigo' => 'sin_permiso', 'message' => 'La contraseña solo se cambia desde la web, ingresando con su cuenta.'], 403);
+        }
+        $datos = $request->validate(['clave' => ['required', 'string', 'min:8', 'max:200', 'confirmed']]);
+        AccesoEscritorio::definir($datos['clave']);
+        Log::info('clave de administración de escritorio actualizada', ['por' => $request->attributes->get('identidad')['email'] ?? null]);
+
+        return response()->json(['definida' => true]);
+    }
+
     public function salir(Request $request): JsonResponse
     {
+        // Sesión de la aplicación de escritorio: solo se revoca su token.
+        $token = (string) $request->bearerToken();
+        if (str_starts_with($token, AccesoEscritorio::PREFIJO)) {
+            AccesoEscritorio::revocar($token);
+
+            return response()->json(['logout_url' => null]);
+        }
+
         $destino = Identidad::config('post_logout_redirect_uri');
         $url = Identidad::config('url').'/logout'.($destino ? '?post_logout_redirect_uri='.urlencode($destino) : '');
 

@@ -20,6 +20,8 @@ class ParametroController extends Controller
         'sufijo_firmado' => ['nullable', 'string', 'max:50', 'regex:/^[^\\\\\/:*?"<>|]*$/'],
         'firma_ancho' => ['nullable', 'integer', 'between:60,600'],
         'firma_alto' => ['nullable', 'integer', 'between:30,300'],
+        // Tema de la web y de la aplicación de escritorio.
+        'tema' => ['nullable', 'in:sistema,claro,oscuro'],
     ];
 
     public function index(): JsonResponse

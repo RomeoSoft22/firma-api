@@ -23,6 +23,7 @@ class Parametro extends Model
         'sufijo_firmado' => '[FIRMADO]',
         'firma_ancho' => '200',
         'firma_alto' => '60',
+        'tema' => 'sistema',
     ];
 
     public static function todos(): array

@@ -58,6 +58,14 @@ class MarcaTest extends TestCase
         ));
     }
 
+    public function test_el_tema_se_guarda_como_parametro(): void
+    {
+        $jwt = $this->tokenIdentidad(['ADMIN']);
+        $this->withToken($jwt)->putJson('/api/parametros', ['tema' => 'oscuro'])->assertOk()->assertJsonPath('tema', 'oscuro');
+        $this->getJson('/api/parametros')->assertJsonPath('tema', 'oscuro');
+        $this->withToken($jwt)->putJson('/api/parametros', ['tema' => 'rosado'])->assertUnprocessable();
+    }
+
     public function test_rechaza_variantes_y_archivos_no_validos(): void
     {
         $jwt = $this->tokenIdentidad(['ADMIN']);
